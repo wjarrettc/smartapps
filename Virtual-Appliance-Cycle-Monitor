@@ -1,0 +1,136 @@
+/**
+ *  Virtual Appliance Cycle Monitor
+ *  This smart app uses the following devices to determine whether or not an appliance cycle has completed
+ *  Appliance Temperature Sensor -- measures temperature of device.  Assumes an elevated temperature means the appliance is running (e.g., Dryer or Dishwasher)
+ *  Appliance Status Switch -- a virtual on/off switch used to track state of the appliance
+ *  Reference Temperature Sensor -- an optional nearby temperature sensor that can be used as a reference to determine if the appliance temperature is elevated
+ *  Appliance Start Button -- an optional physical button device that can be used to indicate appliance cycle has started.  If not defined, or not pushed, smart app will still use temperature to determine start
+ *  Application signals cycle ended when temperature of appliance drops 1 degree, applicaiton signals start of cycle when refernce sensor and appliance are 2 degrees different
+ *  Author: W. Jarrett Campbell, based on code from SmartThings
+ */
+
+definition(
+    name: "Virtual Appliance Cycle Monitor",
+    namespace: "wjarrettc",
+    author: "W. Jarrett Campbell",
+    description: "Monitors temperature vs. an optional reference and deduces when the appliance is running and when it is finished",
+    category: "Convenience",
+    iconUrl: "http://cdn.device-icons.smartthings.com/Appliances/appliances1-icn@2x.png",
+    iconX2Url: "http://cdn.device-icons.smartthings.com/Appliances/appliances1-icn@2x.png"
+)
+
+preferences {
+	section("Choose the Appliance temperature sensor... "){
+		input "sensorAppliance", "capability.temperatureMeasurement", title: "Appliance Sensor", required: true
+	}
+	section("Select the Appliance Status button tile... "){
+		input "statusAppliance", "capability.switch", title: "Appliance Status", required: true
+	}
+ 
+    section("Choose the optional Appliance start button... "){
+		input "buttonDevice", "capability.button", title: "Appliance Start Button", multiple: false, required: false
+	}
+	section("Choose the optional Reference temperature sensor... "){
+		input "sensorRef", "capability.temperatureMeasurement", title: "Reference Sensor", required: false
+	}
+}
+
+def installed()
+{
+	initialize()
+}
+
+def updated()
+{
+	unsubscribe()
+	initialize()
+}
+
+def initialize()
+{
+	log.trace "Virtual Appliance Monitor initialized"
+    subscribe(sensorAppliance, "temperature", temperatureHandler)
+    
+    state.lastApplianceTemp = sensorAppliance.currentTemperature
+    log.trace "Last Appliance Temp = $state.lastApplianceTemp"
+    
+    state.maxCycleTemp = sensorAppliance.currentTemperature
+    log.trace "Max Cycle Temp initialized to current Appliance Temp = $state.lastApplianceTemp"
+    
+    if (sensorRef) {
+    	subscribe(sensorRef, "temperature", temperatureHandler)
+        log.trace "Reference Sensor defined -- subscribing to temperature events for reference sensor."
+        state.lastRefTemp = sensorRef.currentTemperature
+        log.trace "Last Ref Temp = $state.lastRefTemp"
+        }
+    if (buttonDevice) {
+    	subscribe(buttonDevice, "button", buttonEvent)
+        log.trace "Button device defined -- subscribing to button events"
+        }
+}
+
+def temperatureHandler(evt) {
+    log.debug "$evt.device.displayName reported temperature $evt.doubleValue"    
+
+       
+    if ("$evt.device.displayName" == "$sensorAppliance.displayName") {
+        
+        log.debug "Checking status of appliance...status switch is $statusAppliance.currentSwitch"
+        if (statusAppliance.currentSwitch == "on") {
+            log.debug "Comparing appliance temperature $evt.doubleValue to Max Cycle Temp $state.maxCycleTemp"
+            if (evt.doubleValue < state.maxCycleTemp) {
+                log.trace "Reported temperature $evt.doubleValue is less than or equal to Max Cycle Temperature $state.maxCycleTemp minus 1.0"
+                log.trace"Turning off Appliance Status switch"
+                statusAppliance.off()
+                sendPush("$sensorAppliance.displayName cycle completed")
+            } else {
+                
+                if (evt.doubleValue <= state.maxCycleTemp) {
+                    log.debug "Reported temperature is less than Max Cycle Temperature $state.maxCycleTemp but not enough to trigger off state"
+                } else {
+                	log.trace "Reported temperature is greater than Max Cycle Temperature $state.maxCycleTemp"
+                    state.maxCycleTemp = evt.doubleValue
+                	log.trace "Max Cycle Temp updated to $state.maxCycleTemp"
+                }
+            }
+        } else {
+        	log.debug "Appliance not currently running - comparing temperature to last reading $state.lastApplianceTemp"
+            
+            if (evt.doubleValue <= state.lastApplianceTemp) {
+                log.trace "Appliance is still cooling down...no new cycle detected"
+            } else {
+                log.trace "Appliance is warming up, determining if new cycle start detected"
+                if (sensorRef) {
+                	if (evt.doubleValue - 1.0 > state.lastRefTemp) {
+            			log.trace "Temperature offset reached, turning on Appliance Status"
+                		statusAppliance.on()
+                        state.maxCycleTemp = evt.doubleValue
+                		sendPush("$sensorAppliance.displayName cycle start detected")
+                        }
+                    } else {
+                    	log.debug "No Reference Sensor defined.  Must trigger start via physical button or virtual device switch"
+          			}
+            }
+        
+        } 
+    
+    log.trace "Updating Last Appliance Temp to $evt.doubleValue"
+    state.lastApplianceTemp =  evt.doubleValue   
+        
+    } else {
+        log.debug "Reference Sensor reported temperature"
+        state.lastRefTemp = evt.doubleValue
+        log.trace "Last Ref Temp updated to $state.lastRefTemp"
+    }
+      
+}
+
+def buttonEvent(evt) 
+{
+    log.debug "$evt.device.displayName reported event $evt.stringValue" 
+    log.trace "Turning on appliance status virtual switch on button event."
+	statusAppliance.on()
+    log.trace "Setting Max Cycle Temp to current Appliance Temperature $sensorAppliance.currentTemperature."
+    state.maxCycleTemp = sensorAppliance.currentTemperature
+    sendPush("$sensorAppliance.displayName cycle start indicated by $buttonDevice.displayName event")
+}
