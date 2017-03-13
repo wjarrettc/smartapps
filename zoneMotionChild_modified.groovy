@@ -446,7 +446,7 @@ def getURL(zType){
 			return	"https://raw.githubusercontent.com/MikeMaxwell/zmm/master/triggered.png" 
             break
         case "3":
-			return	"" 
+			return	"https://raw.githubusercontent.com/wjarrettc/smartapps/master/ZoneMotionControllerOverrideState.png" 
             break
  	}
 }
